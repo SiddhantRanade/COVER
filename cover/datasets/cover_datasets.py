@@ -6,18 +6,15 @@ import random
 from functools import lru_cache
 
 import cv2
-import decord
 import numpy as np
 import skvideo.io
 import torch
 import torchvision
-from decord import VideoReader, cpu, gpu
 from PIL import Image
 from tqdm import tqdm
+import ffmpeg
 
 random.seed(42)
-
-decord.bridge.set_bridge("torch")
 
 
 def get_spatial_fragments(
@@ -229,6 +226,75 @@ def get_single_view(
     return video
 
 
+def get_video_frames_ff(filepath, rank=None, frame_inds=None):
+    probe = ffmpeg.probe(filepath)
+
+    video_stream = next((stream for stream in probe['streams'] if stream['codec_type'] == 'video'), None)
+
+    w = int(video_stream['width'])
+    h = int(video_stream['height'])
+    fps = eval(video_stream['avg_frame_rate'])
+    if fps is None:
+        print(f"{filepath} has invalid fps.")
+    fps = 30.0 if fps is None else float(fps)
+
+    if rank is None:
+        process = (
+            ffmpeg
+            .input(filepath, loglevel='error')
+        )
+    else:
+        process = (
+            ffmpeg
+            # .input(filepath, loglevel='error')
+            # .input(filepath, loglevel='error', hwaccel='nvdec', hwaccel_device=f'{rank}')
+            .input(filepath, loglevel='error', hwaccel_device=f'{rank}')
+        )
+    
+    if frame_inds is not None:
+        select = '+'.join(f"eq(n,{idx})" for idx in frame_inds)
+        process = process.filter('select', expr=select)
+        # process = process.filter('setpts', expr="N")
+
+    process = (
+        process
+        .output('pipe:', format='rawvideo', pix_fmt='rgb24')
+    )
+
+    if frame_inds is not None:
+        process = process.global_args('-nostdin' , '-vsync', '0')
+    else:
+        process = process.global_args('-nostdin')
+
+    try:
+        process = (
+            process
+            .run_async(cmd='/usr/local/bin/ffmpeg', pipe_stdout=True)
+        )
+        out, _ = process.communicate()
+    except ffmpeg.Error as e:
+        print(f'Frame reading error on filename {filepath}')
+        print('filename:', filepath)
+        print('stdout:', e.stdout.decode('utf8'))
+        print('stderr:', e.stderr.decode('utf8'))
+        raise e
+    except:
+        print(f'Frame reading error on filename {filepath}')
+        print('filename:', filepath)
+    video = (
+        np
+        .frombuffer(out, dtype=np.uint8)
+        .reshape([-1, h, w, 3])
+    )
+
+    video = torch.from_numpy(video)
+
+    if frame_inds is not None and video.shape[0] != len(frame_inds):
+        print(f"Frame number mismatch: {filepath}, {video.shape[0]}, {len(frame_inds)}, Frame indices: {frame_inds}")
+
+    return video
+
+
 def spatial_temporal_view_decomposition(
     video_path, sample_types, samplers, is_train=False, augment=False,
 ):
@@ -244,23 +310,35 @@ def spatial_temporal_view_decomposition(
             imgs = [torch.from_numpy(ovideo[idx]) for idx in frame_inds]
             video[stype] = torch.stack(imgs, 0).permute(3, 0, 1, 2)
         del ovideo
-    elif video_path.endswith(".mp4"):
-        decord.bridge.set_bridge("torch")
-        vreader = VideoReader(video_path)
+    elif video_path.endswith(".mp4") or video_path.endswith(".webm"):
+        rank = None
+        if "LOCAL_RANK" in os.environ:
+            rank = int(os.environ["LOCAL_RANK"])
+
+        try:
+            probe = ffmpeg.probe(video_path)
+            num_frames = int(float(probe['format']['duration']) * eval(probe['streams'][0]['avg_frame_rate']))
+        except Exception as e:
+            print(f"Failed to get number of frames for {video_path}: {e}")
+            raise e
+            # Fallback to MediaInfo if ffprobe fails
+            # num_frames = int(MediaInfo.parse(video_path).video_tracks[0].frame_count)
+
+
         ### Avoid duplicated video decoding!!! Important!!!!
         all_frame_inds = []
         frame_inds = {}
         for stype in samplers:
-            frame_inds[stype] = samplers[stype](len(vreader), is_train)
+            frame_inds[stype] = samplers[stype](num_frames, is_train)
             all_frame_inds.append(frame_inds[stype])
 
-        ### Each frame is only decoded one time!!!
         all_frame_inds = np.concatenate(all_frame_inds, 0)
-        frame_dict = {idx: vreader[idx] for idx in np.unique(all_frame_inds)}
+        all_frame_inds_uniq = sorted(list(set(all_frame_inds)))
 
+        unique_frames = get_video_frames_ff(video_path, rank, all_frame_inds_uniq)
         for stype in samplers:
-            imgs = [frame_dict[idx] for idx in frame_inds[stype]]
-            video[stype] = torch.stack(imgs, 0).permute(3, 0, 1, 2)
+            idx_uniq = [all_frame_inds_uniq.index(ii) for ii in frame_inds[stype]]
+            video[stype] = unique_frames[idx_uniq].permute(3, 0, 1, 2)
     else:
         ireader = Image.open(video_path).convert("RGB")
         img = torch.tensor(np.array(ireader)).permute(2, 0, 1)
@@ -402,8 +480,9 @@ class ViewDecompositionDataset(torch.utils.data.Dataset):
                 video_filenames = []
                 for (root, dirs, files) in os.walk(self.data_prefix, topdown=True):
                     for file in files:
-                        if file.endswith(".mp4"):
-                            video_filenames += [os.path.join(root, file)]
+                        if (file.endswith(".mp4") or file.endswith(".webm")):
+                            if not os.path.isfile(os.path.join(root, file) + '.quality.json'):
+                                video_filenames += [os.path.join(root, file)]
                 print(len(video_filenames))
                 video_filenames = sorted(video_filenames)
                 for filename in video_filenames:
@@ -412,6 +491,8 @@ class ViewDecompositionDataset(torch.utils.data.Dataset):
     def __getitem__(self, index):
         video_info = self.video_infos[index]
         filename = video_info["filename"]
+        # json_filename = os.path.splitext(video_info["filename"])[0] + '.json'
+        json_filename = video_info["filename"] + '.quality.json'
         label = video_info["label"]
 
         try:
@@ -441,9 +522,11 @@ class ViewDecompositionDataset(torch.utils.data.Dataset):
             data["frame_inds"] = frame_inds
             data["gt_label"] = label
             data["name"] = filename  # osp.basename(video_info["filename"])
-        except:
+            data["json_name"] = json_filename  # osp.basename(video_info["filename"])
+        except Exception as e:
+            print(f'{filename} failed: {e}')
             # exception flow
-            return {"name": filename}
+            return {"name": filename, "json_name": json_filename}
 
         return data
 

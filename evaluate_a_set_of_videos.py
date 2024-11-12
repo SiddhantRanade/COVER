@@ -8,6 +8,7 @@ import decord
 import numpy as np
 import yaml
 from tqdm import tqdm
+import json
 
 from cover.datasets import (
     UnifiedFrameSampler,
@@ -40,7 +41,7 @@ def parse_args():
     parser.add_argument("-o", "--opt"   , type=str, default="./cover.yml", help="the option file")
     parser.add_argument('-d', "--device", type=str, default="cuda"       , help='CUDA device id')
     parser.add_argument("-i", "--input_video_dir", type=str, default="./demo", help="the input video dir")
-    parser.add_argument(      "--output", type=str, default="./demo.csv" , help='output file to store predict mos value')
+    parser.add_argument(      "--output", type=str, default="./demo.json" , help='output file to store predict mos value')
     args = parser.parse_args()
     return args
 
@@ -62,7 +63,11 @@ if __name__ == "__main__":
 
 
     video_paths = []
+    # Load existing results if any
     all_results = {}
+    if os.path.exists(args.output):
+        with open(args.output, 'r') as f:
+            all_results = json.load(f)
 
     with open(args.output, "w") as w:
         w.write(f"path, semantic score, technical score, aesthetic score, overall/final score\n")
@@ -72,7 +77,7 @@ if __name__ == "__main__":
     dopt["anno_file"] = None
     dopt["data_prefix"] = args.input_video_dir
 
-    dataset = ViewDecompositionDataset(dopt)
+    dataset = ViewDecompositionDataset(dopt, all_results.keys())
 
     dataloader = torch.utils.data.DataLoader(
         dataset, batch_size=1, num_workers=opt["num_workers"], pin_memory=True,
@@ -81,6 +86,7 @@ if __name__ == "__main__":
     sample_types = ["semantic", "technical", "aesthetic"]
 
     for i, data in enumerate(tqdm(dataloader, desc="Testing")):
+        video_name = data["name"][0].split("/")[-1]
         if len(data.keys()) == 1:
             ##  failed data
             continue
@@ -106,14 +112,14 @@ if __name__ == "__main__":
             results = [np.mean(l.cpu().numpy()) for l in results]
 
         rescaled_results = fuse_results(results)
-        # all_results[data["name"][0]] = rescaled_results
 
-        # with open(
-        #    f"cover_predictions/val-custom_{args.input_video_dir.split('/')[-1]}.pkl", "wb"
-        # ) as wf:
-        # pkl.dump(all_results, wf)
+        all_results[video_name] = {
+            "semantic": float(rescaled_results["semantic"]),
+            "technical": float(rescaled_results["technical"]), 
+            "aesthetic": float(rescaled_results["aesthetic"]),
+            "overall": float(rescaled_results["overall"])
+        }
+
         
-        with open(args.output, "a") as w:
-            w.write(
-                f'{data["name"][0].split("/")[-1]},{rescaled_results["semantic"]:4f},{rescaled_results["technical"]:4f},{rescaled_results["aesthetic"]:4f},{rescaled_results["overall"]:4f}\n'
-            )
+        with open(args.output, 'w') as f:
+            json.dump(all_results, f, indent=2)
