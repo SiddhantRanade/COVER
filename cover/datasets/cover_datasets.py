@@ -330,11 +330,11 @@ def spatial_temporal_view_decomposition(
         #         raise e2
         
         try:
-            num_frames = int(MediaInfo.parse(video_path).video_tracks[0].frame_count)
+            num_frames = int(0.6 * int(MediaInfo.parse(video_path).video_tracks[0].frame_count))
             if num_frames == 0:
                 raise ValueError("MediaInfo returned 0 frames")
         except Exception as e2:
-            print(f"MediaInfo also failed to get frames for {video_path}: {e2}")
+            print(f"MediaInfo failed to get frames for {video_path}: {e2}")
             raise e2
 
         ### Avoid duplicated video decoding!!! Important!!!!
@@ -489,12 +489,9 @@ class ViewDecompositionDataset(torch.utils.data.Dataset):
                         self.video_infos.append(dict(filename=filename, label=label))
             except:
                 #### No Label Testing
-                video_filenames = []
-                glob_files = chain.from_iterable(glob.iglob(osp.join(self.data_prefix, '**', p), recursive=True) for p in ["*.mp4", "*.webm"])
-                for file in (pbar := tqdm(glob_files, desc="Loading video filenames")):   
-                    if not os.path.isfile(file + '.quality.json'):
-                        video_filenames += [file]
-                        pbar.set_description(f"Loading video filenames: {len(video_filenames)} / ??")
+                all_vids = open(osp.join(self.data_prefix, 'videos.list.txt'), 'r').read().splitlines()
+                done_vids = set(open(osp.join(self.data_prefix, 'quality.list.txt'), 'r').read().splitlines())
+                video_filenames = [vid for vid in all_vids if vid + '.quality.json' not in done_vids]
 
                 print(len(video_filenames))
                 video_filenames = sorted(video_filenames)

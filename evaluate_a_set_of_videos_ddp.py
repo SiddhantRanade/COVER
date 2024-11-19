@@ -7,6 +7,7 @@ import numpy as np
 import torch
 import torch.distributed as dist
 import yaml
+from torch.distributed.elastic.multiprocessing.errors import record
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
@@ -50,7 +51,8 @@ def parse_args():
     args = parser.parse_args()
     return args
 
-if __name__ == "__main__":
+@record
+def main():
     args = parse_args()
     # Set up distributed training
     setup_distributed()
@@ -94,7 +96,8 @@ if __name__ == "__main__":
         batch_size=1,
         num_workers=opt["num_workers"],
         pin_memory=True,
-        sampler=sampler
+        sampler=sampler,
+        multiprocessing_context='spawn'
     )
 
     sample_types = ["semantic", "technical", "aesthetic"]
@@ -137,3 +140,7 @@ if __name__ == "__main__":
                 f.write(f"Results: {results}\n")
 
     cleanup_distributed()
+
+
+if __name__ == "__main__":
+    main()
