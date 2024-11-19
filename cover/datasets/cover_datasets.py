@@ -1,18 +1,18 @@
-import copy
 import glob
 import os
 import os.path as osp
 import random
 from functools import lru_cache
+from itertools import chain
 
-import cv2
+import ffmpeg
 import numpy as np
 import skvideo.io
 import torch
 import torchvision
 from PIL import Image
+from pymediainfo import MediaInfo
 from tqdm import tqdm
-import ffmpeg
 
 random.seed(42)
 
@@ -287,7 +287,7 @@ def get_video_frames_ff(filepath, rank=None, frame_inds=None):
         .reshape([-1, h, w, 3])
     )
 
-    video = torch.from_numpy(video)
+    video = torch.from_numpy(video.copy())
 
     if frame_inds is not None and video.shape[0] != len(frame_inds):
         print(f"Frame number mismatch: {filepath}, {video.shape[0]}, {len(frame_inds)}, Frame indices: {frame_inds}")
@@ -315,15 +315,27 @@ def spatial_temporal_view_decomposition(
         if "LOCAL_RANK" in os.environ:
             rank = int(os.environ["LOCAL_RANK"])
 
+        # try:
+        #     probe = ffmpeg.probe(video_path)
+        #     num_frames = int(float(probe['format']['duration']) * eval(probe['streams'][0]['avg_frame_rate']) * 0.6)
+        # except Exception as e:
+        #     print(f"ffprobe failed to get number of frames for {video_path}, trying mediainfo: {e}")
+        #     try:
+        #         # Fallback to MediaInfo if ffprobe fails
+        #         num_frames = int(MediaInfo.parse(video_path).video_tracks[0].frame_count)
+        #         if num_frames == 0:
+        #             raise ValueError("MediaInfo returned 0 frames")
+        #     except Exception as e2:
+        #         print(f"MediaInfo also failed to get frames for {video_path}: {e2}")
+        #         raise e2
+        
         try:
-            probe = ffmpeg.probe(video_path)
-            num_frames = int(float(probe['format']['duration']) * eval(probe['streams'][0]['avg_frame_rate']))
-        except Exception as e:
-            print(f"Failed to get number of frames for {video_path}: {e}")
-            raise e
-            # Fallback to MediaInfo if ffprobe fails
-            # num_frames = int(MediaInfo.parse(video_path).video_tracks[0].frame_count)
-
+            num_frames = int(MediaInfo.parse(video_path).video_tracks[0].frame_count)
+            if num_frames == 0:
+                raise ValueError("MediaInfo returned 0 frames")
+        except Exception as e2:
+            print(f"MediaInfo also failed to get frames for {video_path}: {e2}")
+            raise e2
 
         ### Avoid duplicated video decoding!!! Important!!!!
         all_frame_inds = []
@@ -478,11 +490,12 @@ class ViewDecompositionDataset(torch.utils.data.Dataset):
             except:
                 #### No Label Testing
                 video_filenames = []
-                for (root, dirs, files) in os.walk(self.data_prefix, topdown=True):
-                    for file in files:
-                        if (file.endswith(".mp4") or file.endswith(".webm")):
-                            if not os.path.isfile(os.path.join(root, file) + '.quality.json'):
-                                video_filenames += [os.path.join(root, file)]
+                glob_files = chain.from_iterable(glob.iglob(osp.join(self.data_prefix, '**', p), recursive=True) for p in ["*.mp4", "*.webm"])
+                for file in (pbar := tqdm(glob_files, desc="Loading video filenames")):   
+                    if not os.path.isfile(file + '.quality.json'):
+                        video_filenames += [file]
+                        pbar.set_description(f"Loading video filenames: {len(video_filenames)} / ??")
+
                 print(len(video_filenames))
                 video_filenames = sorted(video_filenames)
                 for filename in video_filenames:

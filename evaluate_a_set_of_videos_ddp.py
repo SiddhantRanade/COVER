@@ -1,24 +1,18 @@
-import torch
-import torch.distributed as dist
-from torch.utils.data.distributed import DistributedSampler
-
 import argparse
+import json
 import os
 import pickle as pkl
 
-import decord
 import numpy as np
+import torch
+import torch.distributed as dist
 import yaml
-from tqdm import tqdm
-import json
-
 from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data.distributed import DistributedSampler
+from tqdm import tqdm
 
-from cover.datasets import (
-    UnifiedFrameSampler,
-    ViewDecompositionDataset,
-    spatial_temporal_view_decomposition,
-)
+from cover.datasets import (UnifiedFrameSampler, ViewDecompositionDataset,
+                            spatial_temporal_view_decomposition)
 from cover.models import COVER
 
 mean, std = (
@@ -58,8 +52,6 @@ def parse_args():
 
 if __name__ == "__main__":
     args = parse_args()
-    
-    out_file = os.path.join(args.input_video_dir, 'quality.json')
     # Set up distributed training
     setup_distributed()
     device = torch.device(f"cuda:{int(os.environ['LOCAL_RANK'])}")
@@ -85,6 +77,15 @@ if __name__ == "__main__":
     # Load existing results if any
 
     dataset = ViewDecompositionDataset(dopt)
+
+    # # Create dataset only on rank 0 and broadcast to all workers
+    # if dist.get_rank() == 0:
+    #     dataset = ViewDecompositionDataset(dopt)
+    # else:
+    #     dataset = None
+    # dataset = [dataset]  # Wrap in list to allow broadcast of None
+    # dist.broadcast_object_list(dataset, src=0)
+    # dataset = dataset[0]  # Unwrap from list
 
     # Add distributed sampler
     sampler = DistributedSampler(dataset, shuffle=False)
