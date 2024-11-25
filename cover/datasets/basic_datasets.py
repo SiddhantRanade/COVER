@@ -2,17 +2,17 @@ import os.path as osp
 import random
 
 import cv2
-import decord
+# import decord
 import numpy as np
 import skvideo.io
 import torch
 import torchvision
-from decord import VideoReader, cpu, gpu
+# from decord import VideoReader, cpu, gpu
 from tqdm import tqdm
 
 random.seed(42)
 
-decord.bridge.set_bridge("torch")
+# decord.bridge.set_bridge("torch")
 
 
 def get_spatial_fragments(

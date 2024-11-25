@@ -261,3 +261,21 @@ Should you find our work interesting and would like to cite it, please feel free
     pages     = {5799-5809}
 }
 ```
+
+## Common Issues
+
+### FFmpeg
+Build and install your own ffmpeg from source code. FFmpeg configure command:
+```
+./configure --enable-nonfree --enable-cuda-nvcc --enable-libnpp --extra-cflags=-I/usr/local/cuda/include --extra-ldflags=-L/usr/local/cuda/lib64 --disable-static --enable-shared --enable-libzimg --enable-gpl --enable-libdav1d --enable-libx265 
+```
+
+### MediaInfo
+`sudo apt install mediainfo` and `pip install pymediainfo` should be enough in theory. However, on some Python versions, you might get the error:
+```
+OSError: Failed to load library from libmediainfo.so.0 - /lib/x86_64-linux-gnu/libp11-kit.so.0: undefined symbol: ffi_type_pointer, version LIBFFI_BASE_7.0
+```
+Apparently, this is because of an anaconda issue where the wrong version of libffi is symlinked. This can be fixed by symlinking system libffi from the anaconda directory:
+```
+ln -sf /usr/lib/x86_64-linux-gnu/libffi.so.7 ~/anaconda3/envs/cover/lib/libffi.so.7
+```

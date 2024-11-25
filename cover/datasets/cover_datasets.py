@@ -424,6 +424,27 @@ class UnifiedFrameSampler:
         return frame_inds.astype(np.int32)
 
 
+def _read_file_with_retry(filepath, max_retries=3):
+    """Helper function to read a file with retry mechanism"""
+    import os
+    import time
+
+    for attempt in range(max_retries):
+        try:
+            # Force close any stale file descriptors
+            os.stat(filepath)
+            with open(filepath, 'r') as f:
+                return f.read().splitlines()
+        except OSError as e:
+            if attempt == max_retries - 1:  # Last attempt
+                print(f"Failed to read {filepath} after {max_retries} attempts: {e}")
+                return []
+            else:
+                time.sleep(1 * (attempt + 1))  # Exponential backoff
+                continue
+    return []
+
+
 class ViewDecompositionDataset(torch.utils.data.Dataset):
     def __init__(self, opt):
         ## opt is a dictionary that includes options for video sampling
@@ -476,7 +497,7 @@ class ViewDecompositionDataset(torch.utils.data.Dataset):
         if isinstance(self.ann_file, list):
             self.video_infos = self.ann_file
         else:
-            try:
+            if self.ann_file is not None:
                 with open(self.ann_file, "r") as fin:
                     for line in fin:
                         line_split = line.strip().split(",")
@@ -487,10 +508,14 @@ class ViewDecompositionDataset(torch.utils.data.Dataset):
                             label = float(label)
                         filename = osp.join(self.data_prefix, filename)
                         self.video_infos.append(dict(filename=filename, label=label))
-            except:
+            else:
                 #### No Label Testing
-                all_vids = open(osp.join(self.data_prefix, 'videos.list.txt'), 'r').read().splitlines()
-                done_vids = set(open(osp.join(self.data_prefix, 'quality.list.txt'), 'r').read().splitlines())
+                videos_list_path = osp.join(self.data_prefix, 'videos.list.txt')
+                quality_list_path = osp.join(self.data_prefix, 'quality.list.txt')
+                
+                all_vids = _read_file_with_retry(videos_list_path)
+                done_vids = set(_read_file_with_retry(quality_list_path))
+
                 video_filenames = [vid for vid in all_vids if vid + '.quality.json' not in done_vids]
 
                 print(len(video_filenames))

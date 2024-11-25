@@ -7,7 +7,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.checkpoint as checkpoint
 from einops import rearrange
-from timm.models.layers import DropPath, trunc_normal_
+from timm.layers import DropPath, trunc_normal_
 
 
 class Mlp(nn.Module):

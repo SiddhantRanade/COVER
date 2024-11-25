@@ -8,7 +8,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from einops import rearrange
-from timm.models.layers import trunc_normal_
+from timm.layers import trunc_normal_
 from torch import nn
 from torch.utils.checkpoint import checkpoint_sequential
 
@@ -572,7 +572,7 @@ class VideoSpecificPrompt(nn.Module):
 
 from collections import OrderedDict
 
-from timm.models.layers import trunc_normal_
+from timm.layers import trunc_normal_
 
 
 class ResidualAttentionBlock(nn.Module):
